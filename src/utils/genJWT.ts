@@ -6,8 +6,9 @@ export const genJWT = (user: any, res: Response) => {
   try {
     const token = jwt.sign(
       {
-        id: user._id,
-        email: user.email
+        _id: user._id,
+        email: user.email,
+        name: user.name
       },
       jwtSecret, // Replace with your actual secret key
       {

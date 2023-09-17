@@ -1,8 +1,11 @@
 import express, { Request, Response } from 'express'
 import { z } from 'zod'
-import bcrypt from 'bcryptjs'
 import { DbSingleton } from '../../utils/singletons/db'
 import { genJWT } from '../../utils/genJWT'
+import asyncHandler from 'express-async-handler'
+import protect from '../../middleware/protect'
+import bcrypt from 'bcryptjs'
+import getHashedPwd from '../../utils/getHashedPwd'
 
 const router = express.Router()
 
@@ -11,114 +14,101 @@ const userLoginSchema = z.object({
   password: z.string().min(8)
 })
 
-router.post('/login', async (req: Request, res: Response) => {
+const userRegisterSchema = z.object({
+  name: z.string().min(3),
+  email: z.string().email(),
+  password: z.string().min(8)
+})
+
+router.post('/login', asyncHandler(async (req: Request, res: Response) => {
   try {
     const { email, password } = userLoginSchema.parse(req.query)
     const db = await DbSingleton.getInstance()
     const found = await db.users.findOne({ email })
 
-    if (found) {
-      res.json({ error: 'User already exists' })
+    if (!found) {
+      res.json({ error: 'User not found' })
       return
     }
 
-    const salt = await bcrypt.genSalt(10)
-    const hashedPassword = await bcrypt.hash(password, salt)
+    const isMatch = await bcrypt.compare(password, found.password)
 
-    const mongoRes = await db.users.insertOne({ email, password: hashedPassword })
-    genJWT({ _id: mongoRes.insertedId, email }, res)
-    res.json({ success: `${email} successfully created` })
+    if (!isMatch) {
+      res.json({ error: 'Invalid credentials' })
+      return
+    }
+
+    genJWT({ _id: found._id, email: found.email, name: found.name }, res)
+
+    res.json({ success: 'Logged in' })
   } catch (error) {
     res.json({ error })
   }
-})
+}))
 
-router.post('/log-out', async (req: Request, res: Response) => {
+router.post('/log-out', asyncHandler(async (req: Request, res: Response) => {
+  res.cookie('jwt', '', { maxAge: 0 })
+  res.json({ success: 'Logged out' })
+}))
+
+router.post('/register', asyncHandler(async (req: Request, res: Response) => {
   try {
-    const { email, password } = userLoginSchema.parse(req.query)
+    const { name, email, password } = userRegisterSchema.parse(req.body)
     const db = await DbSingleton.getInstance()
     const found = await db.users.findOne({ email })
 
     if (found) {
-      res.json({ error: 'User already exists' })
+      res.status(404).json({ error: `Email ${found.email} already registered with account name ${found.name}` })
       return
     }
 
-    const salt = await bcrypt.genSalt(10)
-    const hashedPassword = await bcrypt.hash(password, salt)
+    const hashedPassword = await getHashedPwd(password)
 
-    const mongoRes = await db.users.insertOne({ email, password: hashedPassword })
-    genJWT({ _id: mongoRes.insertedId, email }, res)
-    res.json({ success: `${email} successfully created` })
+    const mongoRes = await db.users.insertOne({ name, email, password: hashedPassword })
+
+    if (!mongoRes.insertedId) {
+      res.status(500).json({ error: 'Failed to create account' })
+      return
+    }
+
+    res.status(200).json({ success: `Successfully created new account for ${name} with ${email}` })
   } catch (error) {
     res.json({ error })
   }
-})
+}))
 
-router.post('/register', async (req: Request, res: Response) => {
+router.get('/profile', protect, asyncHandler(async (req: Request, res: Response) => {
   try {
-    const { email, password } = userLoginSchema.parse(req.query)
-    const db = await DbSingleton.getInstance()
-    const found = await db.users.findOne({ email })
-
-    if (found) {
-      res.json({ error: 'User already exists' })
-      return
-    }
-
-    const salt = await bcrypt.genSalt(10)
-    const hashedPassword = await bcrypt.hash(password, salt)
-
-    const mongoRes = await db.users.insertOne({ email, password: hashedPassword })
-    genJWT({ _id: mongoRes.insertedId, email }, res)
-    res.json({ success: `${email} successfully created` })
+    // @ts-ignore
+    res.json(req.user)
   } catch (error) {
     res.json({ error })
   }
-})
+}))
 
-router.get('/profile', async (req: Request, res: Response) => {
+router.put('/update-profile', protect, asyncHandler(async (req: Request, res: Response) => {
   try {
-    const { email, password } = userLoginSchema.parse(req.query)
+    const { email, password, name } = req.body
     const db = await DbSingleton.getInstance()
-    const found = await db.users.findOne({ email })
+    const hashedPassword = await getHashedPwd(password)
+    // @ts-ignore
+    const found = await db.users.updateOne({ email: req.user.email }, {
+      $set: {
+        email: email || req.user.email,
+        ...(hashedPassword && { password: hashedPassword }),
+        name: name || req.user.name
+      }
+    })
 
-    if (found) {
-      res.json({ error: 'User already exists' })
+    if (!found) {
+      res.json({ error: 'Failed to update profile' })
       return
     }
 
-    const salt = await bcrypt.genSalt(10)
-    const hashedPassword = await bcrypt.hash(password, salt)
-
-    const mongoRes = await db.users.insertOne({ email, password: hashedPassword })
-    genJWT({ _id: mongoRes.insertedId, email }, res)
-    res.json({ success: `${email} successfully created` })
+    res.json({ success: `${email} successfully updated` })
   } catch (error) {
     res.json({ error })
   }
-})
-
-router.put('/update-profile', async (req: Request, res: Response) => {
-  try {
-    const { email, password } = userLoginSchema.parse(req.query)
-    const db = await DbSingleton.getInstance()
-    const found = await db.users.findOne({ email })
-
-    if (found) {
-      res.json({ error: 'User already exists' })
-      return
-    }
-
-    const salt = await bcrypt.genSalt(10)
-    const hashedPassword = await bcrypt.hash(password, salt)
-
-    const mongoRes = await db.users.insertOne({ email, password: hashedPassword })
-    genJWT({ _id: mongoRes.insertedId, email }, res)
-    res.json({ success: `${email} successfully created` })
-  } catch (error) {
-    res.json({ error })
-  }
-})
+}))
 
 export default router
